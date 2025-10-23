@@ -27,8 +27,62 @@
 #import "SAExposureViewObject.h"
 #import "SAExposureManager.h"
 #import "UIScrollView+SADelegateHashTable.h"
+#import "NSObject+SADelegateProxy.h"
 #import <objc/runtime.h>
+#import <objc/message.h>
 #import "SALog.h"
+
+static id SAExposureForwardingTarget(id delegate, Class originClass, SEL selector) {
+    if (!delegate || !originClass || !selector) {
+        return nil;
+    }
+    struct objc_super superInfo = {
+        .receiver = delegate,
+        .super_class = originClass
+    };
+    id (*sendSuper)(struct objc_super *, SEL, SEL) = (id (*)(struct objc_super *, SEL, SEL))objc_msgSendSuper;
+    return sendSuper(&superInfo, @selector(forwardingTargetForSelector:), selector);
+}
+
+static BOOL SAExposureDelegateCanInvokeTarget(id delegate, SEL selector, NSMutableSet<NSValue *> *visited) {
+    if (!delegate || !selector) {
+        return NO;
+    }
+
+    if (!visited) {
+        visited = [NSMutableSet set];
+    }
+
+    NSValue *token = [NSValue valueWithPointer:(__bridge void *)delegate];
+    if ([visited containsObject:token]) {
+        return NO;
+    }
+    [visited addObject:token];
+
+    SADelegateProxyObject *delegateObject = nil;
+    if ([delegate respondsToSelector:@selector(sensorsdata_delegateObject)]) {
+        delegateObject = [delegate sensorsdata_delegateObject];
+    }
+    Class originClass = delegateObject ? delegateObject.delegateISA : object_getClass(delegate);
+    if (!originClass) {
+        return NO;
+    }
+
+    if (class_getInstanceMethod(originClass, selector)) {
+        return YES;
+    }
+
+    id forwardingTarget = SAExposureForwardingTarget(delegate, originClass, selector);
+    if (forwardingTarget) {
+        return SAExposureDelegateCanInvokeTarget(forwardingTarget, selector, visited);
+    }
+
+    return NO;
+}
+
+static BOOL SAExposureDelegateCanInvoke(id delegate, SEL selector) {
+    return SAExposureDelegateCanInvokeTarget(delegate, selector, nil);
+}
 
 @implementation SAExposureDelegateProxy
 
@@ -47,7 +101,7 @@
 
     //invoke original
     SEL methodSelector = @selector(tableView:willDisplayCell:forRowAtIndexPath:);
-    if (class_getInstanceMethod(tableView.delegate.class, methodSelector)) {
+    if (SAExposureDelegateCanInvoke(self, methodSelector)) {
         [SAExposureDelegateProxy invokeWithTarget:self selector:methodSelector, tableView, cell, indexPath];
     }
 
@@ -68,7 +122,7 @@
 
     //invoke original
     SEL methodSelector = @selector(tableView:didEndDisplayingCell:forRowAtIndexPath:);
-    if (class_getInstanceMethod(tableView.delegate.class, methodSelector)) {
+    if (SAExposureDelegateCanInvoke(self, methodSelector)) {
         [SAExposureDelegateProxy invokeWithTarget:self selector:methodSelector, tableView, cell, indexPath];
     }
 
@@ -90,7 +144,7 @@
 
     //invoke original
     SEL methodSelector = @selector(collectionView:willDisplayCell:forItemAtIndexPath:);
-    if (class_getInstanceMethod(collectionView.delegate.class, methodSelector)) {
+    if (SAExposureDelegateCanInvoke(self, methodSelector)) {
         [SAExposureDelegateProxy invokeWithTarget:self selector:methodSelector, collectionView, cell, indexPath];
     }
 
@@ -111,7 +165,7 @@
 
     //invoke original
     SEL methodSelector = @selector(collectionView:didEndDisplayingCell:forItemAtIndexPath:);
-    if (class_getInstanceMethod(collectionView.delegate.class, methodSelector)) {
+    if (SAExposureDelegateCanInvoke(self, methodSelector)) {
         [SAExposureDelegateProxy invokeWithTarget:self selector:methodSelector, collectionView, cell, indexPath];
     }
 
